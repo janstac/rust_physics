@@ -1,0 +1,11 @@
+[package]
+name = "p"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies.notan]
+version = "0.12"
+default-features = false
+features = ["backend", "log", "draw", "glsl-to-spirv", "egui", "extra"]
