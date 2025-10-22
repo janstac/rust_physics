@@ -19,6 +19,7 @@ fn create_world() -> World {
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.0,
+            angular_velocity: 0.0,
             shape: Shape::Circle { radius: 2.0 },
         }
         .build(),
@@ -30,6 +31,7 @@ fn create_world() -> World {
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.0,
+            angular_velocity: 0.0,
             shape: Shape::Circle { radius: 2.0 },
         }
         .build(),
@@ -41,6 +43,7 @@ fn create_world() -> World {
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.0,
+            angular_velocity: 0.0,
             shape: Shape::Circle { radius: 2.0 },
         }
         .build(),
@@ -52,6 +55,7 @@ fn create_world() -> World {
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.0,
+            angular_velocity: 1.0,
             shape: Shape::Rectangle {
                 size: Vec2::new(30.0, 4.0),
             },
@@ -65,6 +69,7 @@ fn create_world() -> World {
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.2,
+            angular_velocity: 0.0,
             shape: Shape::Rectangle {
                 size: Vec2::new(30.0, 4.0),
             },

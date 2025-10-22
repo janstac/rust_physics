@@ -11,6 +11,7 @@ pub struct BodyProperties {
     pub reciprocal_mass: Float,
     pub restitution: Float,
     pub angle: Float,
+    pub angular_velocity: Float,
 }
 
 #[derive(Clone)]
@@ -30,6 +31,7 @@ pub struct BodyCreator {
     pub restitution: Float,
     /// Anticlockwise angle in radians around centre
     pub angle: Float,
+    pub angular_velocity: Float,
 
     pub shape: Shape,
 }
@@ -45,6 +47,7 @@ impl BodyCreator {
                 reciprocal_mass: self.reciprocal_mass,
                 restitution: self.restitution,
                 angle: self.angle,
+                angular_velocity: self.angular_velocity
             },
             shape: self.shape,
         }
@@ -95,7 +98,9 @@ impl World {
         }
     }
     pub fn step(&mut self) {
-        let collision_pair_indexes = {
+        // At the moment, this just creates a list of every possible pairing of bodies
+        // TODO: eliminate pairs somehow
+        let possible_collision_pair_indexes = {
             let mut result = Vec::new();
             for i in 0..self.bodies.len() {
                 for j in i + 1..self.bodies.len() {
@@ -111,12 +116,16 @@ impl World {
                 body.p.previous_position = body.p.position;
                 body.p.previous_velocity = body.p.velocity;
                 body.p.velocity.y += self.gravity * substep_time;
+
+                // TODO
+                // If the body is being accelerated, there is a more accurate way to calculate the new position
                 body.p.position += body.p.velocity * substep_time;
+                body.p.angle += body.p.angular_velocity * substep_time;
             }
 
             let collisions = find_collisions(
                 self.bodies.as_mut_slice(),
-                collision_pair_indexes.as_slice(),
+                possible_collision_pair_indexes.as_slice(),
             );
 
             for body in self.bodies.iter_mut() {
@@ -138,30 +147,44 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let (body1, body2) = body_pair(bodies, body1_index, body2_index);
 
         // Move bodies by amounts proportional to their reciprocal masses so they no longer intersect
+
+        // Calculate size of displacements
         let reciprocal_masses_sum = body1.p.reciprocal_mass + body2.p.reciprocal_mass;
         let body1_displacement_size =
             contact.intersection_depth * body1.p.reciprocal_mass / reciprocal_masses_sum;
         let body2_displacement_size =
             contact.intersection_depth * body2.p.reciprocal_mass / reciprocal_masses_sum;
+
+        // Contact normal points from body 1 to 2, so -= for 1 and += for 2
         body1.p.position -= contact.normal * body1_displacement_size;
         body2.p.position += contact.normal * body2_displacement_size;
 
         // Update velocities
-        let relative_normal_velocity = (body1.p.velocity - body2.p.velocity).dot(&contact.normal);
-        let previous_relative_normal_velocity =
+
+        let relative_velocity_along_normal =
+            (body1.p.velocity - body2.p.velocity).dot(&contact.normal);
+        let previous_relative_velocity_along_normal =
             (body1.p.previous_velocity - body2.p.previous_velocity).dot(&contact.normal);
+
+        // Use average restitution
         let restitution = (body1.p.restitution + body2.p.restitution) / 2.0;
-        let relative_velocity_change = contact.normal
-            * (relative_normal_velocity + restitution * previous_relative_normal_velocity);
+
+        let total_relative_velocity_change =
+            relative_velocity_along_normal + restitution * previous_relative_velocity_along_normal;
         let reciprocal_masses_sum = body1.p.reciprocal_mass + body2.p.reciprocal_mass;
-        body1.p.velocity -=
-            relative_velocity_change / reciprocal_masses_sum * body1.p.reciprocal_mass;
-        body2.p.velocity +=
-            relative_velocity_change / reciprocal_masses_sum * body2.p.reciprocal_mass;
+
+        let body1_velocity_change =
+            total_relative_velocity_change / reciprocal_masses_sum * body1.p.reciprocal_mass;
+        let body2_velocity_change =
+            total_relative_velocity_change / reciprocal_masses_sum * body2.p.reciprocal_mass;
+
+        body1.p.velocity -= contact.normal * body1_velocity_change;
+        body2.p.velocity += contact.normal * body2_velocity_change;
     }
 }
 
 fn find_collisions(
+    // TODO: why did I make this mut?
     bodies: &mut [Body],
     collision_pair_indexes: &[(usize, usize)],
 ) -> Vec<Collision> {
@@ -169,6 +192,8 @@ fn find_collisions(
 
     for &(body1_index, body2_index) in collision_pair_indexes {
         let (body1, body2) = body_pair(bodies, body1_index, body2_index);
+
+        // If both bodies have infinite mass, they should pass through each other
         if body1.p.reciprocal_mass == 0.0 && body2.p.reciprocal_mass == 0.0 {
             continue;
         };
@@ -179,6 +204,8 @@ fn find_collisions(
             (&Shape::Rectangle { size: size1 }, &Shape::Rectangle { size: size2 }) => {
                 rectangle_rectangle_collision(&body1.p, size1, &body2.p, size2)
             }
+
+            // Not implemented
             _ => None,
         };
         if let Some(contact) = collision_contact {
@@ -201,7 +228,6 @@ fn body_pair(
     (&mut left[body1_index], &mut right[0])
 }
 
-// Assumes reciprocal masses are not 0
 fn circle_circle_collision(
     p1: &BodyProperties,
     radius1: Float,
@@ -221,6 +247,7 @@ fn circle_circle_collision(
     let distance_between_centres = centre_1_to_2.length();
     // Prevent division by 0
     let collision_normal = if distance_between_centres == 0.0 {
+        // Circles have the exact same position, so any unit vector could be used as the normal
         Vec2::new(1.0, 0.0)
     } else {
         centre_1_to_2 / distance_between_centres
@@ -234,6 +261,7 @@ fn circle_circle_collision(
     })
 }
 
+// Collisions between axis-aligned rectangles (so assumes angle is 0)
 fn _rectangle_rectangle_collision_old(
     p1: &BodyProperties,
     size1: Vec2,
@@ -279,23 +307,30 @@ fn rectangle_rectangle_collision(
     p2: &BodyProperties,
     size2: Vec2,
 ) -> Option<CollisionContact> {
+    // Checks if rectangles are colliding by using the separating axis theorem
+
     // unit vectors rotated by angle of rectangle
     fn get_rotated_unit_vectors(angle: Float) -> (Vec2, Vec2) {
-        let t = angle.sin_cos();
-        (Vec2::new(t.1, t.0), Vec2::new(-t.0, t.1))
+        let (s, c) = angle.sin_cos();
+        (Vec2::new(c, s), Vec2::new(-s, c))
     }
+
+    // Pairs of x & y unit vectors rotated by angles of rectangles 1 and 2
     let (rotated_unit_x_1, rotated_unit_y_1) = get_rotated_unit_vectors(p1.angle);
     let (rotated_unit_x_2, rotated_unit_y_2) = get_rotated_unit_vectors(p2.angle);
 
     fn get_rectangle_vertices(position: Vec2, size: Vec2, rotated_unit_x: Vec2) -> [Vec2; 4] {
         [
-            Vec2::new(1.0, 1.0),
-            Vec2::new(-1.0, 1.0),
-            Vec2::new(-1.0, -1.0),
-            Vec2::new(1.0, -1.0),
+            // Vertices of a unit square centered at origin
+            Vec2::new(0.5, 0.5),
+            Vec2::new(-0.5, 0.5),
+            Vec2::new(-0.5, -0.5),
+            Vec2::new(0.5, -1.0),
         ]
         .map(|corner| {
-            let corner = Vec2::new(corner.x * 0.5 * size.x, corner.y * 0.5 * size.y);
+            // Scale position by size of rectangle
+            let corner = Vec2::new(corner.x * size.x, corner.y * size.y);
+            // Rotate it by angle
             let corner = Vec2::new(
                 rotated_unit_x.x * corner.x - rotated_unit_x.y * corner.y,
                 rotated_unit_x.y * corner.x + rotated_unit_x.x * corner.y,
@@ -309,9 +344,12 @@ fn rectangle_rectangle_collision(
 
     let mut collision_contact: Option<CollisionContact> = None;
 
-    fn get_min_max_of_vertices_on_axis(points: &[Vec2], axis: Vec2) -> (Float, Float) {
+    // Project each point onto axis vector, and find the minimum and maximum projections
+    fn get_min_max_projections_of_vertices_on_axis(points: &[Vec2], axis: Vec2) -> (Float, Float) {
+        // Initialise with projections of first point
         let mut min = points[0].dot(&axis);
         let mut max = min;
+
         for p in points.iter().skip(1) {
             let projection = axis.dot(p);
             if projection < min {
@@ -323,6 +361,8 @@ fn rectangle_rectangle_collision(
         (min, max)
     }
 
+    // Check if both (min,max) ranges overlap, and if so, return true, and replace the collision contact if
+    // this new overlap is smaller
     fn check_intersection_on_axis(
         (min1, max1): (Float, Float),
         (min2, max2): (Float, Float),
@@ -334,17 +374,25 @@ fn rectangle_rectangle_collision(
             *collision_contact = None;
             return false;
         }
+        // There is overlap on the axis
+
         let intersection_depth;
         let collision_normal;
+
+        // Check which way the overlap is smaller
         if (max2 - min1) < (max1 - min2) {
-            // Move body 1 in positive direction of axis
+            // 1:           |--------|  ->
+            // 2: <-  |-------|
             collision_normal = Vec2::zero() - axis;
             intersection_depth = max2 - min1;
         } else {
-            // Move body 2 in negative direction of axis
+            // 1: <-  |--------|
+            // 2:            |-------|  ->
             collision_normal = axis;
             intersection_depth = max1 - min2;
         }
+
+        // Should replace existing collision contact if there isn't one or if a smaller intersection depth was found
         let should_replace = collision_contact.is_none()
             || collision_contact
                 .as_ref()
@@ -364,9 +412,11 @@ fn rectangle_rectangle_collision(
         rotated_unit_x_2,
         rotated_unit_y_2,
     ] {
-        let m1 = get_min_max_of_vertices_on_axis(&vertices1, axis);
-        let m2 = get_min_max_of_vertices_on_axis(&vertices2, axis);
+        let m1 = get_min_max_projections_of_vertices_on_axis(&vertices1, axis);
+        let m2 = get_min_max_projections_of_vertices_on_axis(&vertices2, axis);
         let should_continue = check_intersection_on_axis(m1, m2, axis, &mut collision_contact);
+
+        // If there is an axis on which there is no overlap, rectangles are not intersecting
         if !should_continue {
             break;
         }
