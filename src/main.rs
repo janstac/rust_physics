@@ -11,7 +11,7 @@ use std::time;
 fn create_world() -> World {
     // Time in seconds that each physics step should be
     const STEP_TIME: f64 = 1.0 / 30.0;
-    let mut world = World::new(STEP_TIME, 3, -1.0);
+    let mut world = World::new(STEP_TIME, 3, 0.1);
     world.bodies.push(
         BodyCreator {
             position: Vec2::new(0.0, -4.0),
@@ -54,8 +54,8 @@ fn create_world() -> World {
             velocity: Vec2::new(10.0, -3.0),
             reciprocal_mass: 1.0,
             restitution: 1.0,
-            angle: 0.0,
-            angular_velocity: 1.0,
+            angle: 1.0,
+            angular_velocity: 0.0,
             shape: Shape::Rectangle {
                 size: Vec2::new(30.0, 4.0),
             },
@@ -175,6 +175,14 @@ fn draw(
                 .fill();
             }
         }
+    }
+
+    // TODO: temporary
+    for contact in state.world.contacts.iter() {
+        draw.circle(coord.length(0.5))
+            .position(coord.x(contact.x), coord.y(contact.y))
+            .fill_color(Color::RED)
+            .fill();
     }
 
     graphics.render(&draw);
