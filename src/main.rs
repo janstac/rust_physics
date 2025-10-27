@@ -65,7 +65,7 @@ fn create_world() -> World {
     world.bodies.push(
         BodyCreator {
             position: Vec2::new(30.0, -20.0),
-            velocity: Vec2::new(-10.0, -2.0),
+            velocity: Vec2::new(-10.0, 10.0),
             reciprocal_mass: 1.0,
             restitution: 1.0,
             angle: 0.2,

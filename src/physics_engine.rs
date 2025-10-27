@@ -197,7 +197,6 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         body1.p.position -= contact.normal * body1_displacement_size;
         body2.p.position += contact.normal * body2_displacement_size;
 
-
         // Impulse resolution including angular effects
 
         // Contact point and radii from centres
@@ -222,15 +221,14 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         // Average restitution
         let restitution = (body1.p.restitution + body2.p.restitution) / 2.0;
 
-
         // TODO: understand this
 
         // Rotational contribution: (r × n)^2 * invI
         let r1n = cross_vec_vec(r1, contact.normal);
         let r2n = cross_vec_vec(r2, contact.normal);
-        let invI1 = inv_inertia(body1);
-        let invI2 = inv_inertia(body2);
-        let inv_inertia_sum = r1n * r1n * invI1 + r2n * r2n * invI2;
+        let inv_inertia1 = inv_inertia(body1);
+        let inv_inertia2 = inv_inertia(body2);
+        let inv_inertia_sum = r1n * r1n * inv_inertia1 + r2n * r2n * inv_inertia2;
 
         let denom = reciprocal_masses_sum + inv_inertia_sum;
 
@@ -244,8 +242,8 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         // Apply angular impulses (Δω = invI * τ, τ = r × F; body1 gets -impulse, body2 gets +impulse)
         let tau1 = cross_vec_vec(r1, impulse);
         let tau2 = cross_vec_vec(r2, impulse);
-        body1.p.angular_velocity -= invI1 * tau1;
-        body2.p.angular_velocity += invI2 * tau2;
+        body1.p.angular_velocity -= inv_inertia1 * tau1;
+        body2.p.angular_velocity += inv_inertia2 * tau2;
     }
 }
 
@@ -263,6 +261,7 @@ fn find_collisions(
         if body1.p.reciprocal_mass == 0.0 && body2.p.reciprocal_mass == 0.0 {
             continue;
         };
+
         let collision_contact = match (&body1.shape, &body2.shape) {
             (&Shape::Circle { radius: radius1 }, &Shape::Circle { radius: radius2 }) => {
                 circle_circle_collision(&body1.p, radius1, &body2.p, radius2)
@@ -270,10 +269,22 @@ fn find_collisions(
             (&Shape::Rectangle { size: size1 }, &Shape::Rectangle { size: size2 }) => {
                 rectangle_rectangle_collision(&body1.p, size1, &body2.p, size2)
             }
+            (&Shape::Rectangle { size: rectangle_size }, &Shape::Circle { radius: circle_radius }) => {
+                rectangle_circle_collision(&body1.p, rectangle_size, &body2.p, circle_radius)
+            }
+            (&Shape::Circle { radius: circle_radius }, &Shape::Rectangle { size: rectangle_size }) => {
+                let mut result = rectangle_circle_collision(&body2.p, rectangle_size, &body1.p, circle_radius);
+                // negate normal
+                if let Some(ref mut contact) = result {
+                    contact.normal *= -1.0;
+                }
+                result
+            }
 
             // Not implemented
             _ => None,
         };
+
         if let Some(contact) = collision_contact {
             collisions.push(Collision {
                 body1_index,
@@ -331,46 +342,176 @@ fn circle_circle_collision(
     })
 }
 
-// Collisions between axis-aligned rectangles (so assumes angle is 0)
-/* fn _rectangle_rectangle_collision_old(
-    p1: &BodyProperties,
-    size1: Vec2,
-    p2: &BodyProperties,
-    size2: Vec2,
+fn rectangle_circle_collision(
+    p_rectangle: &BodyProperties,
+    rectangle_size: Vec2,
+    p_circle: &BodyProperties,
+    circle_radius: Float,
 ) -> Option<CollisionContact> {
-    let x_intersection = 0.5 * (size1.x + size2.x) - (p1.position.x - p2.position.x).abs();
-    if x_intersection < 0.0 {
-        return None;
+    // Checks if rectangles are colliding by using the separating axis theorem
+
+    // x & y unit vectors rotated by angle of rectangle
+    let (rotated_unit_x_1, rotated_unit_y_1) = get_rotated_unit_vectors(p_rectangle.angle);
+
+    let vertices1 = get_rectangle_vertices(p_rectangle.position, rectangle_size, rotated_unit_x_1);
+
+    let mut collision_contact: Option<CollisionContact> = None;
+
+    let axis3 = (p_circle.position - p_rectangle.position).normalised();
+
+    for (axis, axis_is_from_body1) in [
+        (rotated_unit_x_1, true),
+        (rotated_unit_y_1, true),
+        (axis3, false)
+    ] {
+        let minmax1 =  get_min_max_projections_of_vertices_on_axis(&vertices1, axis);
+        let minmax2 = {
+            let min_point = p_circle.position - axis * circle_radius;
+            let max_point = p_circle.position + axis * circle_radius;
+            MinMaxProjections { min: min_point.dot(&axis), max: max_point.dot(&axis), min_point, max_point }
+        };
+        let should_continue = check_intersection_on_axis(
+            minmax1,
+            minmax2,
+            axis,
+            &mut collision_contact,
+            axis_is_from_body1,
+        );
+
+        // If there is an axis on which there is no overlap, rectangles are not intersecting
+        if !should_continue {
+            break;
+        }
     }
 
-    let y_intersection = 0.5 * (size1.y + size2.y) - (p1.position.y - p2.position.y).abs();
-    if y_intersection < 0.0 {
-        return None;
-    }
+    collision_contact
+}
 
-    let intersection_depth: Float;
-    let collision_normal = if x_intersection < y_intersection {
-        intersection_depth = x_intersection;
-        if p1.position.x < p2.position.x {
-            Vec2::new(1.0, 0.0)
-        } else {
-            Vec2::new(-1.0, 0.0)
-        }
-    } else {
-        intersection_depth = y_intersection;
-        if p1.position.y < p2.position.y {
-            Vec2::new(0.0, 1.0)
-        } else {
-            Vec2::new(0.0, -1.0)
-        }
-    };
+// unit vectors rotated by angle of rectangle
+fn get_rotated_unit_vectors(angle: Float) -> (Vec2, Vec2) {
+    let (s, c) = angle.sin_cos();
+    (Vec2::new(c, s), Vec2::new(-s, c))
+}
 
-    Some(CollisionContact {
-        normal: collision_normal,
-        intersection_depth,
+fn get_rectangle_vertices(position: Vec2, size: Vec2, rotated_unit_x: Vec2) -> [Vec2; 4] {
+    [
+        // Vertices of a unit square centered at origin
+        Vec2::new(0.5, 0.5),
+        Vec2::new(-0.5, 0.5),
+        Vec2::new(-0.5, -0.5),
+        Vec2::new(0.5, -0.5),
+    ]
+    .map(|corner| {
+        // Scale position by size of rectangle
+        let corner = Vec2::new(corner.x * size.x, corner.y * size.y);
+        // Rotate it by angle
+        let corner = Vec2::new(
+            rotated_unit_x.x * corner.x - rotated_unit_x.y * corner.y,
+            rotated_unit_x.y * corner.x + rotated_unit_x.x * corner.y,
+        );
+        position + corner
     })
 }
- */
+
+struct MinMaxProjections {
+    min: Float,
+    max: Float,
+    min_point: Vec2,
+    max_point: Vec2,
+}
+// Project each point onto axis vector, and find the minimum and maximum projections
+fn get_min_max_projections_of_vertices_on_axis(points: &[Vec2], axis: Vec2) -> MinMaxProjections {
+    // Initialise with projections of first point
+    let mut min_point = points[0];
+    let mut min = min_point.dot(&axis);
+    let mut max_point = min_point;
+    let mut max = min;
+
+    for p in points.iter().skip(1) {
+        let projection = axis.dot(p);
+        if projection < min {
+            min = projection;
+            min_point = *p;
+        } else if projection > max {
+            max = projection;
+            max_point = *p;
+        }
+    }
+    MinMaxProjections {
+        min,
+        max,
+        min_point,
+        max_point,
+    }
+}
+
+// Check if both (min,max) ranges overlap, and if so, return true, and replace the collision contact if
+// this new overlap is smaller
+fn check_intersection_on_axis(
+    minmax1: MinMaxProjections,
+    minmax2: MinMaxProjections,
+    axis: Vec2,
+    collision_contact: &mut Option<CollisionContact>,
+    axis_is_from_body1: bool,
+) -> bool {
+    let min1 = minmax1.min;
+    let max1 = minmax1.max;
+    let min2 = minmax2.min;
+    let max2 = minmax2.max;
+
+    if min1 > max2 || min2 > max1 {
+        // Not intersecting
+        *collision_contact = None;
+        return false;
+    }
+    // There is overlap on the axis
+
+    let intersection_depth;
+    let collision_normal;
+    let contact_point;
+
+    // Check which way the overlap is smaller
+    if (max2 - min1) < (max1 - min2) {
+        // 1:           |--------|  ->
+        // 2: <-  |-------|
+        collision_normal = Vec2::zero() - axis;
+        intersection_depth = max2 - min1;
+
+        let half_overlap_vector = collision_normal * intersection_depth / 2.0;
+        contact_point = if axis_is_from_body1 {
+            minmax2.max_point + half_overlap_vector
+        } else {
+            minmax1.min_point - half_overlap_vector
+        };
+    } else {
+        // 1: <-  |--------|
+        // 2:            |-------|  ->
+        collision_normal = axis;
+        intersection_depth = max1 - min2;
+
+        let half_overlap_vector = collision_normal * intersection_depth / 2.0;
+        contact_point = if axis_is_from_body1 {
+            minmax2.min_point + half_overlap_vector
+        } else {
+            minmax1.max_point - half_overlap_vector
+        };
+    }
+
+    // Should replace existing collision contact if there isn't one or if a smaller intersection depth was found
+    let should_replace = collision_contact.is_none()
+        || collision_contact
+            .as_ref()
+            .is_some_and(|c| c.intersection_depth > intersection_depth);
+    if should_replace {
+        *collision_contact = Some(CollisionContact {
+            normal: collision_normal,
+            intersection_depth,
+            contact_point,
+        });
+    };
+    true
+}
+
 fn rectangle_rectangle_collision(
     p1: &BodyProperties,
     size1: Vec2,
@@ -379,142 +520,14 @@ fn rectangle_rectangle_collision(
 ) -> Option<CollisionContact> {
     // Checks if rectangles are colliding by using the separating axis theorem
 
-    // unit vectors rotated by angle of rectangle
-    fn get_rotated_unit_vectors(angle: Float) -> (Vec2, Vec2) {
-        let (s, c) = angle.sin_cos();
-        (Vec2::new(c, s), Vec2::new(-s, c))
-    }
-
     // Pairs of x & y unit vectors rotated by angles of rectangles 1 and 2
     let (rotated_unit_x_1, rotated_unit_y_1) = get_rotated_unit_vectors(p1.angle);
     let (rotated_unit_x_2, rotated_unit_y_2) = get_rotated_unit_vectors(p2.angle);
-
-    fn get_rectangle_vertices(position: Vec2, size: Vec2, rotated_unit_x: Vec2) -> [Vec2; 4] {
-        [
-            // Vertices of a unit square centered at origin
-            Vec2::new(0.5, 0.5),
-            Vec2::new(-0.5, 0.5),
-            Vec2::new(-0.5, -0.5),
-            Vec2::new(0.5, -0.5),
-        ]
-        .map(|corner| {
-            // Scale position by size of rectangle
-            let corner = Vec2::new(corner.x * size.x, corner.y * size.y);
-            // Rotate it by angle
-            let corner = Vec2::new(
-                rotated_unit_x.x * corner.x - rotated_unit_x.y * corner.y,
-                rotated_unit_x.y * corner.x + rotated_unit_x.x * corner.y,
-            );
-            position + corner
-        })
-    }
 
     let vertices1 = get_rectangle_vertices(p1.position, size1, rotated_unit_x_1);
     let vertices2 = get_rectangle_vertices(p2.position, size2, rotated_unit_x_2);
 
     let mut collision_contact: Option<CollisionContact> = None;
-
-    struct MinMaxProjections {
-        min: Float,
-        max: Float,
-        min_point: Vec2,
-        max_point: Vec2,
-    }
-    // Project each point onto axis vector, and find the minimum and maximum projections
-    fn get_min_max_projections_of_vertices_on_axis(
-        points: &[Vec2],
-        axis: Vec2,
-    ) -> MinMaxProjections {
-        // Initialise with projections of first point
-        let mut min_point = points[0];
-        let mut min = min_point.dot(&axis);
-        let mut max_point = min_point;
-        let mut max = min;
-
-        for p in points.iter().skip(1) {
-            let projection = axis.dot(p);
-            if projection < min {
-                min = projection;
-                min_point = *p;
-            } else if projection > max {
-                max = projection;
-                max_point = *p;
-            }
-        }
-        MinMaxProjections {
-            min,
-            max,
-            min_point,
-            max_point,
-        }
-    }
-
-    // Check if both (min,max) ranges overlap, and if so, return true, and replace the collision contact if
-    // this new overlap is smaller
-    fn check_intersection_on_axis(
-        minmax1: MinMaxProjections,
-        minmax2: MinMaxProjections,
-        axis: Vec2,
-        collision_contact: &mut Option<CollisionContact>,
-        axis_is_from_body1: bool,
-    ) -> bool {
-        let min1 = minmax1.min;
-        let max1 = minmax1.max;
-        let min2 = minmax2.min;
-        let max2 = minmax2.max;
-
-        if min1 > max2 || min2 > max1 {
-            // Not intersecting
-            *collision_contact = None;
-            return false;
-        }
-        // There is overlap on the axis
-
-        let intersection_depth;
-        let collision_normal;
-        let contact_point;
-
-        // Check which way the overlap is smaller
-        if (max2 - min1) < (max1 - min2) {
-            // 1:           |--------|  ->
-            // 2: <-  |-------|
-            collision_normal = Vec2::zero() - axis;
-            intersection_depth = max2 - min1;
-
-            let half_overlap_vector = collision_normal * intersection_depth / 2.0;
-            contact_point = if axis_is_from_body1 {
-                minmax2.max_point + half_overlap_vector
-            } else {
-                minmax1.min_point - half_overlap_vector
-            };
-        } else {
-            // 1: <-  |--------|
-            // 2:            |-------|  ->
-            collision_normal = axis;
-            intersection_depth = max1 - min2;
-
-            let half_overlap_vector = collision_normal * intersection_depth / 2.0;
-            contact_point = if axis_is_from_body1 {
-                minmax2.min_point + half_overlap_vector
-            } else {
-                minmax1.max_point - half_overlap_vector
-            };
-        }
-
-        // Should replace existing collision contact if there isn't one or if a smaller intersection depth was found
-        let should_replace = collision_contact.is_none()
-            || collision_contact
-                .as_ref()
-                .is_some_and(|c| c.intersection_depth > intersection_depth);
-        if should_replace {
-            *collision_contact = Some(CollisionContact {
-                normal: collision_normal,
-                intersection_depth,
-                contact_point,
-            });
-        };
-        true
-    }
 
     for (axis, axis_is_from_body1) in [
         (rotated_unit_x_1, true),
