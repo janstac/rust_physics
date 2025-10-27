@@ -8,6 +8,7 @@ pub struct BodyProperties {
     pub previous_position: Vec2,
     pub velocity: Vec2,
     pub previous_velocity: Vec2,
+    pub acceleration: Vec2,
     pub reciprocal_mass: Float,
     pub restitution: Float,
     pub angle: Float,
@@ -26,6 +27,7 @@ pub struct BodyCreator {
     /// Position of centre of shape
     pub position: Vec2,
     pub velocity: Vec2,
+    pub acceleration: Vec2,
     /// 1 divided by mass, can be 0
     pub reciprocal_mass: Float,
     pub restitution: Float,
@@ -44,6 +46,8 @@ impl BodyCreator {
                 previous_position: self.position,
                 velocity: self.velocity,
                 previous_velocity: self.velocity,
+                acceleration: self.acceleration,
+
                 reciprocal_mass: self.reciprocal_mass,
                 restitution: self.restitution,
                 angle: self.angle,
@@ -69,8 +73,6 @@ pub enum Shape {
 #[derive(Default, Clone)]
 pub struct World {
     pub bodies: Vec<Body>,
-    /// Acceleration downards
-    pub gravity: Float,
     pub step_time: Float,
     pub substeps: u8,
     pub contacts: Vec<Vec2>, // TODO temp
@@ -91,10 +93,9 @@ struct CollisionContact {
 }
 
 impl World {
-    pub fn new(delta_time: Float, substeps: u8, gravity: Float) -> World {
+    pub fn new(delta_time: Float, substeps: u8) -> World {
         World {
             bodies: vec![],
-            gravity,
             step_time: delta_time,
             substeps,
             contacts: vec![], // TODO temp
@@ -118,7 +119,7 @@ impl World {
             for body in self.bodies.iter_mut() {
                 body.p.previous_position = body.p.position;
                 body.p.previous_velocity = body.p.velocity;
-                body.p.velocity.y += self.gravity * substep_time;
+                body.p.velocity += body.p.acceleration * substep_time;
 
                 // TODO
                 // If the body is being accelerated, there is a more accurate way to calculate the new position
@@ -269,20 +270,31 @@ fn find_collisions(
             (&Shape::Rectangle { size: size1 }, &Shape::Rectangle { size: size2 }) => {
                 rectangle_rectangle_collision(&body1.p, size1, &body2.p, size2)
             }
-            (&Shape::Rectangle { size: rectangle_size }, &Shape::Circle { radius: circle_radius }) => {
-                rectangle_circle_collision(&body1.p, rectangle_size, &body2.p, circle_radius)
-            }
-            (&Shape::Circle { radius: circle_radius }, &Shape::Rectangle { size: rectangle_size }) => {
-                let mut result = rectangle_circle_collision(&body2.p, rectangle_size, &body1.p, circle_radius);
+            (
+                &Shape::Rectangle {
+                    size: rectangle_size,
+                },
+                &Shape::Circle {
+                    radius: circle_radius,
+                },
+            ) => rectangle_circle_collision(&body1.p, rectangle_size, &body2.p, circle_radius),
+            (
+                &Shape::Circle {
+                    radius: circle_radius,
+                },
+                &Shape::Rectangle {
+                    size: rectangle_size,
+                },
+            ) => {
+                let mut result =
+                    rectangle_circle_collision(&body2.p, rectangle_size, &body1.p, circle_radius);
                 // negate normal
                 if let Some(ref mut contact) = result {
                     contact.normal *= -1.0;
                 }
                 result
-            }
-
-            // Not implemented
-            _ => None,
+            } // Not implemented
+              // _ => None,
         };
 
         if let Some(contact) = collision_contact {
@@ -357,18 +369,38 @@ fn rectangle_circle_collision(
 
     let mut collision_contact: Option<CollisionContact> = None;
 
-    let axis3 = (p_circle.position - p_rectangle.position).normalised();
+    let circle_centre_to_closest_vertex = {
+        let centre = p_circle.position;
+        let mut shortest_vector = vertices1[0] - centre;
+        let mut closest_distance_squared = shortest_vector.length_squared();
+        for vertex in vertices1.iter().skip(1) {
+            let vector = *vertex - centre;
+            let distance_squared = vector.length_squared();
+            if distance_squared < closest_distance_squared {
+                shortest_vector = vector;
+                closest_distance_squared = distance_squared;
+            }
+        }
+        shortest_vector
+    };
+
+    let axis3 = circle_centre_to_closest_vertex.normalised();
 
     for (axis, axis_is_from_body1) in [
         (rotated_unit_x_1, true),
         (rotated_unit_y_1, true),
-        (axis3, false)
+        (axis3, false),
     ] {
-        let minmax1 =  get_min_max_projections_of_vertices_on_axis(&vertices1, axis);
+        let minmax1 = get_min_max_projections_of_vertices_on_axis(&vertices1, axis);
         let minmax2 = {
             let min_point = p_circle.position - axis * circle_radius;
             let max_point = p_circle.position + axis * circle_radius;
-            MinMaxProjections { min: min_point.dot(&axis), max: max_point.dot(&axis), min_point, max_point }
+            MinMaxProjections {
+                min: min_point.dot(&axis),
+                max: max_point.dot(&axis),
+                min_point,
+                max_point,
+            }
         };
         let should_continue = check_intersection_on_axis(
             minmax1,
