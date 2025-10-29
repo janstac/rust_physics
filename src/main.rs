@@ -11,7 +11,7 @@ use std::time;
 fn create_world() -> World {
     // Time in seconds that each physics step should be
     const STEP_TIME: f64 = 1.0 / 30.0;
-    let gravity = Vec2::new(0.0, -10.0);
+    let gravity = Vec2::new(0.0, -200.0);
     let mut world = World::new(STEP_TIME, 3);
 
     for i in 0..5 {
@@ -54,11 +54,11 @@ fn create_world() -> World {
         BodyCreator {
             position: Vec2::new(20.0, -30.0),
             velocity: Vec2::zero(),
-            inverse_mass: 0.0,
+            inverse_mass: 2.0,
             friction_coefficient: 0.0,
-            restitution: 0.0,
-            angle: 1.0,
-            angular_velocity: 0.3,
+            restitution: 0.8,
+            angle: 0.0,
+            angular_velocity: 2.0,
             shape: Shape::Rectangle {
                 size: Vec2::new(50.0, 1.0),
             },
@@ -66,14 +66,19 @@ fn create_world() -> World {
         }
         .build(),
     );
+    world.distance_joints.push(DistanceJoint {
+        length: 0.0,
+        anchor: Vec2::new(00.0, 00.0),
+        body_index: BodyIndex(world.bodies.len() - 1),
+    });
 
     world.bodies.push(
         BodyCreator {
-            position: Vec2::new(35.9, -28.0),
+            position: Vec2::new(40.0, 00.0),
             velocity: Vec2::zero(),
-            inverse_mass: 1.0,
+            inverse_mass: 0.1,
             friction_coefficient: 0.0,
-            restitution: 1.0,
+            restitution: 2.0,
             angle: 0.0,
             angular_velocity: 0.0,
             shape: Shape::Circle { radius: 2.0 },
@@ -81,6 +86,11 @@ fn create_world() -> World {
         }
         .build(),
     );
+    world.distance_joints.push(DistanceJoint {
+        length: 20.0,
+        anchor: Vec2::new(20.0, 0.0),
+        body_index: BodyIndex(world.bodies.len() - 1),
+    });
     world
 }
 
@@ -127,7 +137,7 @@ fn update(_app: &mut notan::app::App, _plugins: &mut notan::app::Plugins, state:
     }
 
     let calculation_duration = time_before_calculation.elapsed();
-    println!("{}",calculation_duration.as_micros());
+    println!("{}", calculation_duration.as_micros());
 
     *time_of_last_step += time::Duration::from_secs_f64(step_duration * steps as f64);
 }
@@ -164,6 +174,19 @@ fn draw(
     let mut draw = graphics.create_draw();
     draw.clear(Color::GRAY);
 
+    for distance_joint in state.world.distance_joints.iter() {
+        let body = &state.world.bodies[distance_joint.body_index.0];
+        draw.line(
+            (coord.x(body.p.position.x), coord.y(body.p.position.y)),
+            (
+                coord.x(distance_joint.anchor.x),
+                coord.y(distance_joint.anchor.y),
+            ),
+        )
+        .color(Color::GREEN)
+        .width(coord.length(0.1));
+    }
+
     for body in state.world.bodies.iter() {
         match body.shape {
             Shape::Circle { radius } => {
@@ -190,12 +213,12 @@ fn draw(
     }
 
     // TODO: temporary
-    for contact in state.world.contacts.iter() {
-        draw.circle(coord.length(0.2))
-            .position(coord.x(contact.x), coord.y(contact.y))
-            .fill_color(Color::RED)
-            .fill();
-    }
+    // for contact in state.world.contacts.iter() {
+    //     draw.circle(coord.length(0.2))
+    //         .position(coord.x(contact.x), coord.y(contact.y))
+    //         .fill_color(Color::RED)
+    //         .fill();
+    // }
 
     graphics.render(&draw);
 }

@@ -25,6 +25,9 @@ pub struct Body {
     pub shape: Shape,
 }
 
+#[derive(Clone, Copy)]
+pub struct BodyIndex(pub usize);
+
 #[derive(Clone)]
 pub struct BodyCreator {
     /// Position of centre of shape
@@ -58,7 +61,7 @@ impl BodyCreator {
                 friction_coefficient: self.friction_coefficient,
                 angle: self.angle,
                 angular_velocity: self.angular_velocity,
-                inverse_inertia: calculate_inverse_inertia(self.inverse_mass, &self.shape)
+                inverse_inertia: calculate_inverse_inertia(self.inverse_mass, &self.shape),
             },
             shape: self.shape,
         }
@@ -78,16 +81,23 @@ pub enum Shape {
 }
 
 #[derive(Clone)]
+pub struct DistanceJoint {
+    pub length: Float,
+    pub anchor: Vec2,
+    pub body_index: BodyIndex,
+}
+
+#[derive(Clone)]
 pub struct World {
     pub bodies: Vec<Body>,
     pub step_time: Float,
     pub substeps: u8,
-    pub contacts: Vec<Vec2>, // TODO temp
+    pub distance_joints: Vec<DistanceJoint>,
 }
 
 struct Collision {
-    body1_index: usize,
-    body2_index: usize,
+    body1_index: BodyIndex,
+    body2_index: BodyIndex,
     contact: CollisionContact,
 }
 
@@ -105,7 +115,7 @@ impl World {
             bodies: vec![],
             step_time: delta_time,
             substeps,
-            contacts: vec![], // TODO temp
+            distance_joints: vec![],
         }
     }
     pub fn step(&mut self) {
@@ -115,7 +125,7 @@ impl World {
             let mut result = Vec::new();
             for i in 0..self.bodies.len() {
                 for j in i + 1..self.bodies.len() {
-                    result.push((i, j));
+                    result.push((BodyIndex(i), BodyIndex(j)));
                 }
             }
             result
@@ -144,6 +154,7 @@ impl World {
             // }
 
             resolve_collisions(self.bodies.as_mut_slice(), collisions.as_slice());
+            resolve_distance_joints(self);
         }
     }
 }
@@ -229,7 +240,8 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         // Rotational contribution: (r × n)^2 * invI
         let r1n = cross_vec_vec(r1, contact.normal);
         let r2n = cross_vec_vec(r2, contact.normal);
-        let inv_inertia_sum = r1n * r1n * body1.p.inverse_inertia + r2n * r2n * body2.p.inverse_inertia;
+        let inv_inertia_sum =
+            r1n * r1n * body1.p.inverse_inertia + r2n * r2n * body2.p.inverse_inertia;
 
         let denom = inverse_masses_sum + inv_inertia_sum;
         if denom <= 0.0 {
@@ -288,11 +300,14 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
     }
 }
 
-fn find_collisions(bodies: &[Body], collision_pair_indexes: &[(usize, usize)]) -> Vec<Collision> {
+fn find_collisions(
+    bodies: &[Body],
+    collision_pair_indexes: &[(BodyIndex, BodyIndex)],
+) -> Vec<Collision> {
     let mut collisions = Vec::<Collision>::new();
 
     for &(body1_index, body2_index) in collision_pair_indexes {
-        let (body1, body2) = (&bodies[body1_index], &bodies[body2_index]);
+        let (body1, body2) = (&bodies[body1_index.0], &bodies[body2_index.0]);
 
         // If both bodies have infinite mass, they should pass through each other
         if body1.p.inverse_mass == 0.0 && body2.p.inverse_mass == 0.0 {
@@ -353,11 +368,38 @@ fn find_collisions(bodies: &[Body], collision_pair_indexes: &[(usize, usize)]) -
     collisions
 }
 
+/// body1_index < body2_index
 fn body_pair_mut(
     bodies: &mut [Body],
-    body1_index: usize,
-    body2_index: usize,
+    body1_index: BodyIndex,
+    body2_index: BodyIndex,
 ) -> (&mut Body, &mut Body) {
-    let (left, right) = bodies.split_at_mut(body2_index);
-    (&mut left[body1_index], &mut right[0])
+    let (left, right) = bodies.split_at_mut(body2_index.0);
+    (&mut left[body1_index.0], &mut right[0])
+}
+
+fn resolve_distance_joints(world: &mut World) {
+    for joint in world.distance_joints.iter() {
+        let body = &mut world.bodies[joint.body_index.0];
+        if (joint.length == 0.0) {
+            body.p.position = joint.anchor;
+            body.p.velocity = Vec2::zero();
+            continue;
+        }
+        let to_anchor = joint.anchor - body.p.position;
+        let current_length = to_anchor.length();
+        if current_length == 0.0 {
+            continue;
+        }
+        let difference = current_length - joint.length;
+        let correction_direction = to_anchor / current_length;
+        // Move body to correct length
+        body.p.position += correction_direction * difference;
+
+        // correct the velocity
+        let previous_to_anchor = joint.anchor - body.p.previous_position;
+        // previous_to_anchor.length() is not zero if anchor.length is not zero
+        let previous_tangent = Vec2::new(-previous_to_anchor.y, previous_to_anchor.x).normalised();
+        body.p.velocity = previous_tangent * body.p.velocity.dot(&previous_tangent);
+    }
 }
