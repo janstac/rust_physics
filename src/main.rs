@@ -13,75 +13,25 @@ fn create_world() -> World {
     const STEP_TIME: f64 = 1.0 / 30.0;
     let gravity = Vec2::new(0.0, -10.0);
     let mut world = World::new(STEP_TIME, 3);
-    world.bodies.push(
-        BodyCreator {
-            position: Vec2::new(0.0, -4.0),
-            velocity: Vec2::new(0.0, 0.0),
-            reciprocal_mass: 1.0,
-            restitution: 1.0,
-            angle: 0.0,
-            angular_velocity: 0.0,
-            shape: Shape::Circle { radius: 2.0 },
-            acceleration: gravity,
-        }
-        .build(),
-    );
-    world.bodies.push(
-        BodyCreator {
-            position: Vec2::new(-20.0, 0.0),
-            velocity: Vec2::new(10.0, 0.0),
-            reciprocal_mass: 1.0,
-            restitution: 1.0,
-            angle: 0.0,
-            angular_velocity: 0.0,
-            shape: Shape::Circle { radius: 2.0 },
-            acceleration: gravity,
-        }
-        .build(),
-    );
-    world.bodies.push(
-        BodyCreator {
-            position: Vec2::new(20.0, 0.0),
-            velocity: Vec2::new(-10.0, 0.0),
-            reciprocal_mass: 1.0,
-            restitution: 1.0,
-            angle: 0.0,
-            angular_velocity: 0.0,
-            shape: Shape::Circle { radius: 2.0 },
-            acceleration: gravity,
-        }
-        .build(),
-    );
-    world.bodies.push(
-        BodyCreator {
-            position: Vec2::new(-30.0, -20.0),
-            velocity: Vec2::new(10.0, -3.0),
-            reciprocal_mass: 1.0,
-            restitution: 1.0,
-            angle: 1.0,
-            angular_velocity: 0.0,
-            shape: Shape::Rectangle {
-                size: Vec2::new(30.0, 4.0),
-            },
-            acceleration: gravity,
-        }
-        .build(),
-    );
-    world.bodies.push(
-        BodyCreator {
-            position: Vec2::new(30.0, -20.0),
-            velocity: Vec2::new(-10.0, 10.0),
-            reciprocal_mass: 1.0,
-            restitution: 1.0,
-            angle: 0.2,
-            angular_velocity: 0.0,
-            shape: Shape::Rectangle {
-                size: Vec2::new(30.0, 4.0),
-            },
-            acceleration: gravity,
-        }
-        .build(),
-    );
+
+    for i in 0..5 {
+        world.bodies.push(
+            BodyCreator {
+                position: Vec2::new(0.0, -15.0 + i as Float * 10.0),
+                velocity: Vec2::zero(),
+                reciprocal_mass: 1.0,
+                restitution: 0.5,
+                angle: 0.0,
+                angular_velocity: 0.0,
+                shape: Shape::Rectangle {
+                    size: Vec2::new(4.0, 4.0),
+                },
+                acceleration: gravity,
+            }
+            .build(),
+        );
+    }
+
     world.bodies.push(
         BodyCreator {
             position: Vec2::new(0.0, -30.0),
@@ -98,7 +48,7 @@ fn create_world() -> World {
         .build(),
     );
 
-        world.bodies.push(
+    world.bodies.push(
         BodyCreator {
             position: Vec2::new(35.9, -28.0),
             velocity: Vec2::zero(),
@@ -149,9 +99,16 @@ fn update(_app: &mut notan::app::App, _plugins: &mut notan::app::Plugins, state:
     let elapsed_duration = time_of_last_step.elapsed().as_secs_f64();
     let step_duration = state.world.step_time;
     let steps = (elapsed_duration / step_duration) as u8;
+
+    let time_before_calculation = time::Instant::now();
+
     for _ in 0..steps {
         state.world.step();
     }
+
+    let calculation_duration = time_before_calculation.elapsed();
+    // println!("{}",calculation_duration.as_micros());
+
     *time_of_last_step += time::Duration::from_secs_f64(step_duration * steps as f64);
 }
 

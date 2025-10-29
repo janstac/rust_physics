@@ -39,6 +39,15 @@ impl Vec2 {
     }
 }
 
+pub fn cross_vec_vec(a: Vec2, b: Vec2) -> Float {
+    // (ax, ay, 0) x (bx, by, 0) = (0,0, z)
+    a.x * b.y - a.y * b.x
+}
+pub fn cross_scalar_vec(s: Float, v: Vec2) -> Vec2 {
+    // (0,0,s) x (vx, vy, 0)
+    Vec2::new(-s * v.y, s * v.x)
+}
+
 // Implementations of basic operations
 
 impl ops::AddAssign<Vec2> for Vec2 {
