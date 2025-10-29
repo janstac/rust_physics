@@ -19,7 +19,7 @@ fn create_world() -> World {
             BodyCreator {
                 position: Vec2::new(0.0, -15.0 + i as Float * 10.0),
                 velocity: Vec2::zero(),
-                reciprocal_mass: 1.0,
+                inverse_mass: 1.0,
                 restitution: 0.5,
                 friction_coefficient: 0.0,
                 angle: 0.0,
@@ -37,7 +37,7 @@ fn create_world() -> World {
         BodyCreator {
             position: Vec2::new(0.0, -30.0),
             velocity: Vec2::zero(),
-            reciprocal_mass: 0.0,
+            inverse_mass: 0.0,
             restitution: 0.0,
             friction_coefficient: 0.0,
             angle: 0.0,
@@ -54,7 +54,7 @@ fn create_world() -> World {
         BodyCreator {
             position: Vec2::new(20.0, -30.0),
             velocity: Vec2::zero(),
-            reciprocal_mass: 0.0,
+            inverse_mass: 0.0,
             friction_coefficient: 0.0,
             restitution: 0.0,
             angle: 1.0,
@@ -71,7 +71,7 @@ fn create_world() -> World {
         BodyCreator {
             position: Vec2::new(35.9, -28.0),
             velocity: Vec2::zero(),
-            reciprocal_mass: 1.0,
+            inverse_mass: 1.0,
             friction_coefficient: 0.0,
             restitution: 1.0,
             angle: 0.0,

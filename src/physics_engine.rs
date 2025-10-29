@@ -10,11 +10,12 @@ pub struct BodyProperties {
     pub velocity: Vec2,
     pub previous_velocity: Vec2,
     pub acceleration: Vec2,
-    pub reciprocal_mass: Float,
+    pub inverse_mass: Float,
     pub restitution: Float,
     pub friction_coefficient: Float,
     pub angle: Float,
     pub angular_velocity: Float,
+    pub inverse_inertia: Float,
 }
 
 #[derive(Clone)]
@@ -31,7 +32,7 @@ pub struct BodyCreator {
     pub velocity: Vec2,
     pub acceleration: Vec2,
     /// 1 divided by mass, can be 0
-    pub reciprocal_mass: Float,
+    pub inverse_mass: Float,
     pub restitution: Float,
     pub friction_coefficient: Float,
 
@@ -52,11 +53,12 @@ impl BodyCreator {
                 previous_velocity: self.velocity,
                 acceleration: self.acceleration,
 
-                reciprocal_mass: self.reciprocal_mass,
+                inverse_mass: self.inverse_mass,
                 restitution: self.restitution,
                 friction_coefficient: self.friction_coefficient,
                 angle: self.angle,
                 angular_velocity: self.angular_velocity,
+                inverse_inertia: calculate_inverse_inertia(self.inverse_mass, &self.shape)
             },
             shape: self.shape,
         }
@@ -147,13 +149,12 @@ impl World {
 }
 
 // Compute inverse moment of inertia from shape and inverse mass
-fn inv_inertia(body: &Body) -> Float {
-    let inv_m = body.p.reciprocal_mass;
+fn calculate_inverse_inertia(inv_m: Float, shape: &Shape) -> Float {
     if inv_m == 0.0 {
         return 0.0;
     }
-    match body.shape {
-        Shape::Circle { radius } => {
+    match shape {
+        &Shape::Circle { radius } => {
             // I = 0.5 * m * r^2  => invI = 2 * inv_m / r^2
             if radius <= 0.0 {
                 0.0
@@ -161,7 +162,7 @@ fn inv_inertia(body: &Body) -> Float {
                 2.0 * inv_m / (radius * radius)
             }
         }
-        Shape::Rectangle { size } => {
+        &Shape::Rectangle { size } => {
             // I = (1/12) * m * (w^2 + h^2) => invI = 12 * inv_m / (w^2 + h^2)
             let w2h2 = size.x * size.x + size.y * size.y;
             if w2h2 <= 0.0 {
@@ -182,15 +183,15 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
     {
         let (body1, body2) = body_pair_mut(bodies, body1_index, body2_index);
 
-        // Move bodies by amounts proportional to their reciprocal masses so they no longer intersect
+        // Move bodies by amounts proportional to their inverse masses so they no longer intersect
 
-        // reciprocal_masses_sum==0 has alredy been checked
-        let reciprocal_masses_sum = body1.p.reciprocal_mass + body2.p.reciprocal_mass;
+        // inverse_masses_sum==0 has alredy been checked
+        let inverse_masses_sum = body1.p.inverse_mass + body2.p.inverse_mass;
 
         let body1_displacement_size =
-            contact.intersection_depth * body1.p.reciprocal_mass / reciprocal_masses_sum;
+            contact.intersection_depth * body1.p.inverse_mass / inverse_masses_sum;
         let body2_displacement_size =
-            contact.intersection_depth * body2.p.reciprocal_mass / reciprocal_masses_sum;
+            contact.intersection_depth * body2.p.inverse_mass / inverse_masses_sum;
 
         // The contact normal points from body 1 to 2, so -= for 1 and += for 2
         body1.p.position -= contact.normal * body1_displacement_size;
@@ -228,11 +229,9 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         // Rotational contribution: (r × n)^2 * invI
         let r1n = cross_vec_vec(r1, contact.normal);
         let r2n = cross_vec_vec(r2, contact.normal);
-        let inv_inertia1 = inv_inertia(body1);
-        let inv_inertia2 = inv_inertia(body2);
-        let inv_inertia_sum = r1n * r1n * inv_inertia1 + r2n * r2n * inv_inertia2;
+        let inv_inertia_sum = r1n * r1n * body1.p.inverse_inertia + r2n * r2n * body2.p.inverse_inertia;
 
-        let denom = reciprocal_masses_sum + inv_inertia_sum;
+        let denom = inverse_masses_sum + inv_inertia_sum;
         if denom <= 0.0 {
             continue;
         }
@@ -240,14 +239,14 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let impulse = contact.normal * impulse_scalar;
 
         // Apply linear impulses
-        body1.p.velocity -= impulse * body1.p.reciprocal_mass;
-        body2.p.velocity += impulse * body2.p.reciprocal_mass;
+        body1.p.velocity -= impulse * body1.p.inverse_mass;
+        body2.p.velocity += impulse * body2.p.inverse_mass;
 
         // Apply angular impulses (Δω = invI * τ, τ = r × F; body1 gets -impulse, body2 gets +impulse)
         let tau1 = cross_vec_vec(r1, impulse);
         let tau2 = cross_vec_vec(r2, impulse);
-        body1.p.angular_velocity -= inv_inertia1 * tau1;
-        body2.p.angular_velocity += inv_inertia2 * tau2;
+        body1.p.angular_velocity -= body1.p.inverse_inertia * tau1;
+        body2.p.angular_velocity += body2.p.inverse_inertia * tau2;
 
         // Friction
 
@@ -258,9 +257,9 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let r1tangent = cross_vec_vec(r1, tangent);
         let r2tangent = cross_vec_vec(r2, tangent);
 
-        let denom_tangent = reciprocal_masses_sum
-            + r1tangent * r1tangent * inv_inertia1
-            + r2tangent * r2tangent * inv_inertia2;
+        let denom_tangent = inverse_masses_sum
+            + r1tangent * r1tangent * body1.p.inverse_inertia
+            + r2tangent * r2tangent * body2.p.inverse_inertia;
         if denom_tangent > 0.0 {
             // Velocity after applying normal impulse
             let vel1_at_contact = body1.p.velocity + cross_scalar_vec(body1.p.angular_velocity, r1);
@@ -278,13 +277,13 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
             let impulse_tangent = tangent * impulse_tangent_scalar;
 
             // Apply linear impulses
-            body1.p.velocity -= impulse_tangent * body1.p.reciprocal_mass;
-            body2.p.velocity += impulse_tangent * body2.p.reciprocal_mass;
+            body1.p.velocity -= impulse_tangent * body1.p.inverse_mass;
+            body2.p.velocity += impulse_tangent * body2.p.inverse_mass;
             // Apply angular impulses
             let tau1t = cross_vec_vec(r1, impulse_tangent);
             let tau2t = cross_vec_vec(r2, impulse_tangent);
-            body1.p.angular_velocity -= inv_inertia1 * tau1t;
-            body2.p.angular_velocity += inv_inertia2 * tau2t;
+            body1.p.angular_velocity -= body1.p.inverse_inertia * tau1t;
+            body2.p.angular_velocity += body2.p.inverse_inertia * tau2t;
         }
     }
 }
@@ -296,7 +295,7 @@ fn find_collisions(bodies: &[Body], collision_pair_indexes: &[(usize, usize)]) -
         let (body1, body2) = (&bodies[body1_index], &bodies[body2_index]);
 
         // If both bodies have infinite mass, they should pass through each other
-        if body1.p.reciprocal_mass == 0.0 && body2.p.reciprocal_mass == 0.0 {
+        if body1.p.inverse_mass == 0.0 && body2.p.inverse_mass == 0.0 {
             continue;
         };
 
