@@ -1,7 +1,7 @@
 mod collision_detection;
 pub mod vector;
 
-pub use vector::{Float, Vec2, cross_scalar_vec, cross_vec_vec};
+pub use vector::{cross_scalar_vec, cross_vec_vec, Float, Vec2};
 
 #[derive(Clone)]
 pub struct BodyProperties {
@@ -12,6 +12,7 @@ pub struct BodyProperties {
     pub acceleration: Vec2,
     pub reciprocal_mass: Float,
     pub restitution: Float,
+    pub friction_coefficient: Float,
     pub angle: Float,
     pub angular_velocity: Float,
 }
@@ -32,6 +33,8 @@ pub struct BodyCreator {
     /// 1 divided by mass, can be 0
     pub reciprocal_mass: Float,
     pub restitution: Float,
+    pub friction_coefficient: Float,
+
     /// Anticlockwise angle in radians around centre
     pub angle: Float,
     pub angular_velocity: Float,
@@ -51,6 +54,7 @@ impl BodyCreator {
 
                 reciprocal_mass: self.reciprocal_mass,
                 restitution: self.restitution,
+                friction_coefficient: self.friction_coefficient,
                 angle: self.angle,
                 angular_velocity: self.angular_velocity,
             },
@@ -71,7 +75,7 @@ pub enum Shape {
     },
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct World {
     pub bodies: Vec<Body>,
     pub step_time: Float,
@@ -133,9 +137,9 @@ impl World {
                 possible_collision_pair_indexes.as_slice(),
             );
 
-            for collision in collisions.iter() {
-                self.contacts.push(collision.contact.contact_point); // TODO temp
-            }
+            // for collision in collisions.iter() {
+            //     self.contacts.push(collision.contact.contact_point); // TODO temp
+            // }
 
             resolve_collisions(self.bodies.as_mut_slice(), collisions.as_slice());
         }
@@ -179,6 +183,8 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let (body1, body2) = body_pair_mut(bodies, body1_index, body2_index);
 
         // Move bodies by amounts proportional to their reciprocal masses so they no longer intersect
+
+        // reciprocal_masses_sum==0 has alredy been checked
         let reciprocal_masses_sum = body1.p.reciprocal_mass + body2.p.reciprocal_mass;
 
         let body1_displacement_size =
@@ -200,7 +206,7 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         // Relative velocity at contact
         // r x angular_velocity is velocity due to rotation
         let vel1_at_contact = body1.p.velocity + cross_scalar_vec(body1.p.angular_velocity, r1);
-        let vel2_at_contact = body2.p.velocity + cross_scalar_vec( body2.p.angular_velocity, r2);
+        let vel2_at_contact = body2.p.velocity + cross_scalar_vec(body2.p.angular_velocity, r2);
 
         // >0 means separating
         let relative_velocity_along_normal =
@@ -211,10 +217,13 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
             continue;
         }
 
-        // Average restitution
-        let restitution = (body1.p.restitution + body2.p.restitution) / 2.0;
-
-        // TODO: understand this
+        let bounce_threshold = 0.3;
+        let restitution = if -relative_velocity_along_normal < bounce_threshold {
+            0.0
+        } else {
+            // Average restitution
+            (body1.p.restitution + body2.p.restitution) / 2.0
+        };
 
         // Rotational contribution: (r × n)^2 * invI
         let r1n = cross_vec_vec(r1, contact.normal);
@@ -224,7 +233,9 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let inv_inertia_sum = r1n * r1n * inv_inertia1 + r2n * r2n * inv_inertia2;
 
         let denom = reciprocal_masses_sum + inv_inertia_sum;
-
+        if denom <= 0.0 {
+            continue;
+        }
         let impulse_scalar = -(1.0 + restitution) * relative_velocity_along_normal / denom;
         let impulse = contact.normal * impulse_scalar;
 
@@ -237,13 +248,48 @@ fn resolve_collisions(bodies: &mut [Body], collisions: &[Collision]) {
         let tau2 = cross_vec_vec(r2, impulse);
         body1.p.angular_velocity -= inv_inertia1 * tau1;
         body2.p.angular_velocity += inv_inertia2 * tau2;
+
+        // Friction
+
+        let tangent = {
+            let n = contact.normal;
+            Vec2::new(-n.y, n.x)
+        };
+        let r1tangent = cross_vec_vec(r1, tangent);
+        let r2tangent = cross_vec_vec(r2, tangent);
+
+        let denom_tangent = reciprocal_masses_sum
+            + r1tangent * r1tangent * inv_inertia1
+            + r2tangent * r2tangent * inv_inertia2;
+        if denom_tangent > 0.0 {
+            // Velocity after applying normal impulse
+            let vel1_at_contact = body1.p.velocity + cross_scalar_vec(body1.p.angular_velocity, r1);
+            let vel2_at_contact = body2.p.velocity + cross_scalar_vec(body2.p.angular_velocity, r2);
+            let relative_velocity = vel2_at_contact - vel1_at_contact;
+
+            let impulse_tangent_scalar = -relative_velocity.dot(&tangent) / denom_tangent;
+
+            let friction_coefficient =
+                0.5 * (body1.p.friction_coefficient + body2.p.friction_coefficient);
+            let impulse_tangent_scalar = impulse_tangent_scalar.clamp(
+                -friction_coefficient * impulse_scalar,
+                friction_coefficient * impulse_scalar,
+            );
+            let impulse_tangent = tangent * impulse_tangent_scalar;
+
+            // Apply linear impulses
+            body1.p.velocity -= impulse_tangent * body1.p.reciprocal_mass;
+            body2.p.velocity += impulse_tangent * body2.p.reciprocal_mass;
+            // Apply angular impulses
+            let tau1t = cross_vec_vec(r1, impulse_tangent);
+            let tau2t = cross_vec_vec(r2, impulse_tangent);
+            body1.p.angular_velocity -= inv_inertia1 * tau1t;
+            body2.p.angular_velocity += inv_inertia2 * tau2t;
+        }
     }
 }
 
-fn find_collisions(
-    bodies: &[Body],
-    collision_pair_indexes: &[(usize, usize)],
-) -> Vec<Collision> {
+fn find_collisions(bodies: &[Body], collision_pair_indexes: &[(usize, usize)]) -> Vec<Collision> {
     let mut collisions = Vec::<Collision>::new();
 
     for &(body1_index, body2_index) in collision_pair_indexes {
@@ -288,7 +334,7 @@ fn find_collisions(
                     &body1.p,
                     circle_radius,
                 );
-                // negate normal
+                // negate normal so it points from body 1 to body 2
                 if let Some(ref mut contact) = result {
                     contact.normal *= -1.0;
                 }

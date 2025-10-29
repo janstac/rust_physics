@@ -21,6 +21,7 @@ fn create_world() -> World {
                 velocity: Vec2::zero(),
                 reciprocal_mass: 1.0,
                 restitution: 0.5,
+                friction_coefficient: 0.0,
                 angle: 0.0,
                 angular_velocity: 0.0,
                 shape: Shape::Rectangle {
@@ -38,6 +39,7 @@ fn create_world() -> World {
             velocity: Vec2::zero(),
             reciprocal_mass: 0.0,
             restitution: 0.0,
+            friction_coefficient: 0.0,
             angle: 0.0,
             angular_velocity: 0.0,
             shape: Shape::Rectangle {
@@ -50,9 +52,27 @@ fn create_world() -> World {
 
     world.bodies.push(
         BodyCreator {
+            position: Vec2::new(20.0, -30.0),
+            velocity: Vec2::zero(),
+            reciprocal_mass: 0.0,
+            friction_coefficient: 0.0,
+            restitution: 0.0,
+            angle: 1.0,
+            angular_velocity: 0.3,
+            shape: Shape::Rectangle {
+                size: Vec2::new(50.0, 1.0),
+            },
+            acceleration: Vec2::zero(),
+        }
+        .build(),
+    );
+
+    world.bodies.push(
+        BodyCreator {
             position: Vec2::new(35.9, -28.0),
             velocity: Vec2::zero(),
             reciprocal_mass: 1.0,
+            friction_coefficient: 0.0,
             restitution: 1.0,
             angle: 0.0,
             angular_velocity: 0.0,
@@ -107,7 +127,7 @@ fn update(_app: &mut notan::app::App, _plugins: &mut notan::app::Plugins, state:
     }
 
     let calculation_duration = time_before_calculation.elapsed();
-    // println!("{}",calculation_duration.as_micros());
+    println!("{}",calculation_duration.as_micros());
 
     *time_of_last_step += time::Duration::from_secs_f64(step_duration * steps as f64);
 }
